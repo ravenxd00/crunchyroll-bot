@@ -72,14 +72,16 @@ async def change_email_command(update: Update, context: ContextTypes.DEFAULT_TYP
             await page.wait_for_selector('input[name="email"]', timeout=15000)
             await page.fill('input[name="email"]', email)
 
-            await page.wait_for_selector('button[type="submit"]', timeout=15000)
-            await page.click('button[type="submit"]')
+            submit_btn = page.locator('button[type="submit"]')
+            await submit_btn.wait_for(timeout=15000)
+            await submit_btn.click()
 
             await page.wait_for_selector('input[name="password"]', timeout=15000)
             await page.fill('input[name="password"]', password)
 
-            await page.wait_for_selector('button[type="submit"]', timeout=15000)
-            await page.click('button[type="submit"]')
+            submit_btn = page.locator('button[type="submit"]')
+            await submit_btn.wait_for(timeout=15000)
+            await submit_btn.click()
 
             await page.wait_for_url("https://www.crunchyroll.com/", timeout=20000)
             await page.goto("https://www.crunchyroll.com/account/email", timeout=15000)
