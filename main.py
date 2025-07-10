@@ -1,88 +1,122 @@
+import os
 import random
 import string
+import asyncio
+import logging
 import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from playwright.async_api import async_playwright
-import os
 
 TOKEN = os.getenv("TOKEN")
 
-def generate_email():
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=10)) + "@spiceupdownloader.xyz"
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-def generate_password():
-    return ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+DOMAIN = "spiceupdownloader.xyz"
 
-async def create_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    email = generate_email()
-    password = generate_password()
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "email": email,
-        "password": password,
-        "username": email.split('@')[0],
-        "birthdate": "1999-01-01",
-        "gender": "not_given"
+def generate_random_email_password():
+    random_str = ''.join(random.choices(string.ascii_lowercase + string.digits, k=5))
+    email = f"{random_str}@{DOMAIN}"
+    password = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+    return email, password
+
+async def create_account() -> tuple:
+    session = requests.Session()
+    email, password = generate_random_email_password()
+
+    headers = {
+        "Content-Type": "application/json",
+        "Origin": "https://www.crunchyroll.com",
+        "Referer": "https://www.crunchyroll.com/register",
+        "User-Agent": "Mozilla/5.0"
     }
+
+    data = {
+        "email": email,
+        "password": password
+    }
+
+    response = session.post(
+        "https://sso.crunchyroll.com/register",
+        headers=headers,
+        json=data
+    )
+
+    if response.status_code == 200:
+        return email, password
+    else:
+        raise Exception(f"Failed to create account: {response.text}")
+
+async def change_email_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        response = requests.post("https://sso.crunchyroll.com/register", json=payload, headers=headers)
-        if response.status_code in [200, 201]:
-            login_link = f"https://www.crunchyroll.com/login?email={email}"
-            msg = f"""𝗛𝗲𝗿𝗲 𝗶𝘀 𝗬𝗼𝘂𝗿 𝗖𝗿𝘂𝗻𝗰𝗵𝘆𝗥𝗼𝗹𝗹 𝗔𝗰𝗰𝗼𝘂𝗻𝘁
+        if len(context.args) != 1 or ":" not in context.args[0]:
+            await update.message.reply_text("Usage: /change email:pass")
+            return
 
-𝗘𝗺𝗮𝗶𝗹: {email}
-𝗣𝗮𝘀𝘀: {password}
+        email, password = context.args[0].split(":", 1)
 
-🔗 [Auto Login Link]({login_link})
-"""
-        else:
-            msg = f"❌ Failed. Status code: {response.status_code}\n{response.text}"
-    except Exception as e:
-        msg = f"⚠️ Error: {e}"
+        await update.message.reply_text("🔄 Logging in...")
 
-    await update.message.reply_text(msg, parse_mode="Markdown")
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context_p = await browser.new_context()
+            page = await context_p.new_page()
 
-async def crunchyroll_change_email(email, password):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
-        page = await context.new_page()
-        try:
-            await page.goto("https://www.crunchyroll.com/login", timeout=15000)
+            await page.goto("https://sso.crunchyroll.com/login")
+            await page.wait_for_selector('input[name="email"]', timeout=15000)
             await page.fill('input[name="email"]', email)
             await page.click('button:has-text("Next")')
-            await page.wait_for_selector('input[name="password"]', timeout=8000)
+
+            await page.wait_for_selector('input[name="password"]', timeout=15000)
             await page.fill('input[name="password"]', password)
             await page.click('button:has-text("Log In")')
-            await page.wait_for_load_state("networkidle", timeout=8000)
 
-            if "login" in page.url.lower():
-                return "❌ Login failed. Check credentials."
+            await page.wait_for_url("https://www.crunchyroll.com/", timeout=15000)
 
-            await page.goto("https://www.crunchyroll.com/account/email", timeout=10000)
-            content = (await page.content()).lower()
-            if "verify your email" in content:
-                await page.click("text=Send Verification Email")
-                return "✅ Verification email sent. Please verify manually, then run /change again."
-            else:
+            await page.goto("https://www.crunchyroll.com/account/email", timeout=15000)
+
+            if await page.is_visible("text=Verify your email"):
+                await page.click("text=Verify your email")
+                await update.message.reply_text("📨 Verification mail sent. Please verify and try again.")
+            elif await page.is_visible("text=Send email change link"):
                 await page.click("text=Send email change link")
-                return "Email Change Link Sent 🤝"
-        except Exception as e:
-            return f"⚠️ Error occurred: {e}"
-        finally:
-            await context.close()
+                await update.message.reply_text("✅ Email Change Link Sent 🤝")
+            else:
+                await update.message.reply_text("⚠️ Couldn't determine email status.")
+            
             await browser.close()
 
-async def change_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args or ':' not in context.args[0]:
-        await update.message.reply_text("❌ Use `/change email:pass`")
-        return
-    email, password = context.args[0].split(':', 1)
-    result = await crunchyroll_change_email(email, password)
-    await update.message.reply_text(result)
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Error occurred: {e}")
 
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("create", create_account))
-app.add_handler(CommandHandler("change", change_command))
-app.run_polling()
+async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.message.reply_text("🛠 Creating Crunchyroll account...")
+
+        email, password = await create_account()
+        username = update.effective_user.username or update.effective_user.first_name or "Unknown"
+
+        msg = f"""𝗛𝗲𝗿𝗲 𝗶𝘀 𝗬𝗼𝘂𝗿 𝗖𝗿𝘂𝗻𝗰𝗵𝘆𝗥𝗼𝗹𝗹 𝗔𝗰𝗰𝗼𝘂𝗻𝘁
+
+𝗘𝗺𝗮𝗶𝗹: {email}
+𝗣𝗮𝘀𝘀:  {password}
+
+Generated By: @{username}
+
+𝙏𝙝𝙖𝙣𝙠 𝙮𝙤𝙪 𝙛𝙤𝙧 𝙪𝙨𝙞𝙣𝙜 𝙢𝙚!
+"""
+        await update.message.reply_text(msg)
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("create", create_command))
+    app.add_handler(CommandHandler("change", change_email_command))
+
+    app.run_polling()
