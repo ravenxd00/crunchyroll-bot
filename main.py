@@ -8,6 +8,9 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from playwright.async_api import async_playwright
 
+# Optional fix for Render asyncio bug
+asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+
 TOKEN = os.getenv("TOKEN")
 
 logging.basicConfig(
@@ -68,14 +71,17 @@ async def change_email_command(update: Update, context: ContextTypes.DEFAULT_TYP
             await page.goto("https://sso.crunchyroll.com/login")
             await page.wait_for_selector('input[name="email"]', timeout=15000)
             await page.fill('input[name="email"]', email)
-            await page.click('button:has-text("Next")')
+
+            await page.wait_for_selector('button[type="submit"]', timeout=15000)
+            await page.click('button[type="submit"]')
 
             await page.wait_for_selector('input[name="password"]', timeout=15000)
             await page.fill('input[name="password"]', password)
-            await page.click('button:has-text("Log In")')
 
-            await page.wait_for_url("https://www.crunchyroll.com/", timeout=15000)
+            await page.wait_for_selector('button[type="submit"]', timeout=15000)
+            await page.click('button[type="submit"]')
 
+            await page.wait_for_url("https://www.crunchyroll.com/", timeout=20000)
             await page.goto("https://www.crunchyroll.com/account/email", timeout=15000)
 
             if await page.is_visible("text=Verify your email"):
